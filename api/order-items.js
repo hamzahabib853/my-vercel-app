@@ -1,3 +1,12 @@
+if (req.headers['content-type'] === 'application/json' && typeof req.body === 'string') {
+  try {
+    req.body = JSON.parse(req.body);
+  } catch (e) {
+    return res.status(400).json({ error: 'Invalid JSON body' });
+  }
+}
+
+
 import fetch from 'node-fetch';
 import aws4 from 'aws4';
 
