@@ -2,7 +2,7 @@ import fetch from 'node-fetch';
 import aws4 from 'aws4';
 
 export default async function handler(req, res) {
-  // Ensure only POST is allowed
+  // Allow only POST
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -44,8 +44,8 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: 'Failed to get LWA token', details: lwaJson });
   }
 
-  // Step 2: Assume AWS role
-  const stsRes = await fetch('https://sts.amazonaws.com/', {
+  // Step 2: Assume AWS role (EU region)
+  const stsRes = await fetch(`https://sts.${process.env.REGION}.amazonaws.com/`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
@@ -54,6 +54,7 @@ export default async function handler(req, res) {
       Action: 'AssumeRole',
       RoleArn: process.env.AWS_ROLE_ARN,
       RoleSessionName: 'spapi-session',
+      ExternalId: process.env.EXTERNAL_ID, // REQUIRED
       Version: '2011-06-15',
     }),
   });
@@ -84,7 +85,7 @@ export default async function handler(req, res) {
     },
   };
 
-  // Sign request with AWS4
+  // Sign SP-API request
   aws4.sign(opts, {
     accessKeyId,
     secretAccessKey,
