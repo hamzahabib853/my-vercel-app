@@ -2,6 +2,23 @@ import fetch from 'node-fetch';
 import aws4 from 'aws4';
 
 export default async function handler(req, res) {
+  // Ensure only POST is allowed
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  // Fix: parse body if Vercel passed it as a string
+  if (
+    req.headers['content-type']?.includes('application/json') &&
+    typeof req.body === 'string'
+  ) {
+    try {
+      req.body = JSON.parse(req.body);
+    } catch (e) {
+      return res.status(400).json({ error: 'Invalid JSON body' });
+    }
+  }
+
   const { orderId } = req.body;
 
   if (!orderId) {
@@ -20,9 +37,11 @@ export default async function handler(req, res) {
     }),
   });
 
-  const { access_token } = await lwaRes.json();
+  const lwaJson = await lwaRes.json();
+  const access_token = lwaJson.access_token;
+
   if (!access_token) {
-    return res.status(401).json({ error: 'Failed to get LWA token' });
+    return res.status(401).json({ error: 'Failed to get LWA token', details: lwaJson });
   }
 
   // Step 2: Assume AWS role
@@ -40,12 +59,13 @@ export default async function handler(req, res) {
   });
 
   const xml = await stsRes.text();
+
   const accessKeyId = xml.match(/<AccessKeyId>(.+?)<\/AccessKeyId>/)?.[1];
   const secretAccessKey = xml.match(/<SecretAccessKey>(.+?)<\/SecretAccessKey>/)?.[1];
   const sessionToken = xml.match(/<SessionToken>(.+?)<\/SessionToken>/)?.[1];
 
   if (!accessKeyId || !secretAccessKey || !sessionToken) {
-    return res.status(403).json({ error: 'Failed to assume role' });
+    return res.status(403).json({ error: 'Failed to assume role', details: xml });
   }
 
   // Step 3: Call SP-API getOrderItems
@@ -64,6 +84,7 @@ export default async function handler(req, res) {
     },
   };
 
+  // Sign request with AWS4
   aws4.sign(opts, {
     accessKeyId,
     secretAccessKey,
@@ -76,5 +97,6 @@ export default async function handler(req, res) {
   });
 
   const data = await spapiRes.json();
-  res.status(200).json(data);
+
+  return res.status(200).json(data);
 }
