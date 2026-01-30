@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 {
     "name": "spapi-proxy",
     "version": "1.0.0",
@@ -7,3 +8,14 @@
         "node-fetch": "^3.3.2"
     }
 }
+=======
+{
+    "name": "spapi-proxy",
+    "version": "1.0.0",
+    "type": "module",
+    "dependencies": {
+        "aws4": "^1.13.2",
+        "node-fetch": "^3.3.2"
+    }
+}
+>>>>>>> 893a665cc5ffa1d080fd6f5510897539a526737b
