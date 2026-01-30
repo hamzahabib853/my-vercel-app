@@ -45,7 +45,7 @@ export default async function handler(req, res) {
   }
 
   // Step 2: Assume AWS role (EU region)
-  const stsRes = await fetch(`https://sts.${process.env.REGION}.amazonaws.com/`, {
+  const stsRes = await fetch(`https://sts.eu-west-1.amazonaws.com/`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
