@@ -142,6 +142,14 @@ try {
 }
 
 
+    try {
+  const testResp = await timeoutFetch('https://example.com', { method: 'GET' }, 5000);
+  console.log('CONNECTIVITY TEST ok', { status: testResp.status });
+} catch (e) {
+  console.error('CONNECTIVITY TEST failed', { code: e?.code, message: e?.message });
+  return jsonResponse(res, 502, { error: 'Outbound connectivity test failed', details: e?.message, code: e?.code });
+}
+
 
     
     // 3) Call SP-API getOrderItems and sign with aws4 using temporary creds
