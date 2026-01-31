@@ -2,7 +2,11 @@
   "name": "spapi-proxy",
   "version": "1.0.0",
   "type": "module",
+  "scripts": {
+    "build": "echo \"no build\""
+  },
   "dependencies": {
+    "@aws-sdk/client-sts": "^3.500.0",
     "aws4": "^1.13.2",
     "node-fetch": "^3.3.2"
   }
