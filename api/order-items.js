@@ -3,57 +3,38 @@ import { STSClient, AssumeRoleCommand } from '@aws-sdk/client-sts';
 import aws4 from 'aws4';
 
 const FETCH_TIMEOUT_MS = 15000;
-
 function timeoutFetch(url, opts = {}, timeout = FETCH_TIMEOUT_MS) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeout);
   const merged = { ...opts, signal: controller.signal };
   return fetch(url, merged).finally(() => clearTimeout(id));
 }
-
 function jsonResponse(res, status, body) {
   return res.status(status).json(body);
 }
 
 export default async function handler(req, res) {
   try {
-    if (req.method !== 'POST') {
-      return jsonResponse(res, 405, { error: 'Method not allowed' });
-    }
+    if (req.method !== 'POST') return jsonResponse(res, 405, { error: 'Method not allowed' });
 
     // Normalize body
     let body = req.body;
     if (typeof body === 'string' && req.headers['content-type']?.includes('application/json')) {
-      try {
-        body = JSON.parse(body);
-      } catch (e) {
-        return jsonResponse(res, 400, { error: 'Invalid JSON body' });
-      }
+      try { body = JSON.parse(body); } catch (e) { return jsonResponse(res, 400, { error: 'Invalid JSON body' }); }
     }
 
     const orderId = body?.orderId;
-    if (!orderId) {
-      return jsonResponse(res, 400, { error: 'Missing orderId' });
-    }
+    if (!orderId) return jsonResponse(res, 400, { error: 'Missing orderId' });
 
-    // Required environment variables
+    // Required env
     const requiredEnv = [
-      'LWA_REFRESH_TOKEN',
-      'LWA_CLIENT_ID',
-      'LWA_CLIENT_SECRET',
-      'AWS_ACCESS_KEY_ID',
-      'AWS_SECRET_ACCESS_KEY',
-      'AWS_ROLE_ARN',
-      'EXTERNAL_ID',
-      'REGION'
+      'LWA_REFRESH_TOKEN','LWA_CLIENT_ID','LWA_CLIENT_SECRET',
+      'AWS_ACCESS_KEY_ID','AWS_SECRET_ACCESS_KEY','AWS_ROLE_ARN',
+      'EXTERNAL_ID','REGION'
     ];
-    for (const key of requiredEnv) {
-      if (!process.env[key]) {
-        return jsonResponse(res, 500, { error: 'Missing environment variable', missing: key });
-      }
-    }
+    for (const k of requiredEnv) if (!process.env[k]) return jsonResponse(res, 500, { error: 'Missing environment variable', missing: k });
 
-    // 1) Get LWA access token
+    // 1) Get LWA token
     const lwaUrl = 'https://api.amazon.com/auth/o2/token';
     const lwaParams = new URLSearchParams({
       grant_type: 'refresh_token',
@@ -72,14 +53,10 @@ export default async function handler(req, res) {
       const text = await lwaResp.text();
       return jsonResponse(res, 401, { error: 'Failed to get LWA token', status: lwaResp.status, details: text });
     }
+    const { access_token } = await lwaResp.json();
+    if (!access_token) return jsonResponse(res, 401, { error: 'LWA token missing', details: await lwaResp.text() });
 
-    const lwaJson = await lwaResp.json();
-    const access_token = lwaJson.access_token;
-    if (!access_token) {
-      return jsonResponse(res, 401, { error: 'LWA token missing in response', details: lwaJson });
-    }
-
-    // 2) Assume role using AWS SDK v3 (signed)
+    // 2) Assume role using AWS SDK (signed)
     const stsClient = new STSClient({
       region: process.env.REGION,
       credentials: {
@@ -88,16 +65,14 @@ export default async function handler(req, res) {
       }
     });
 
-    const assumeCmd = new AssumeRoleCommand({
-      RoleArn: process.env.AWS_ROLE_ARN,
-      RoleSessionName: 'spapi-session',
-      ExternalId: process.env.EXTERNAL_ID,
-      DurationSeconds: 3600
-    });
-
     let assumeResp;
     try {
-      assumeResp = await stsClient.send(assumeCmd);
+      assumeResp = await stsClient.send(new AssumeRoleCommand({
+        RoleArn: process.env.AWS_ROLE_ARN,
+        RoleSessionName: 'spapi-session',
+        ExternalId: process.env.EXTERNAL_ID,
+        DurationSeconds: 3600
+      }));
     } catch (err) {
       return jsonResponse(res, 403, { error: 'Failed to assume role', details: err.message || String(err) });
     }
@@ -124,7 +99,6 @@ export default async function handler(req, res) {
       }
     };
 
-    // Sign request with temporary credentials
     aws4.sign(opts, {
       accessKeyId: creds.AccessKeyId,
       secretAccessKey: creds.SecretAccessKey,
@@ -132,29 +106,20 @@ export default async function handler(req, res) {
     });
 
     const spapiUrl = `https://${host}${path}`;
-    const spapiResp = await timeoutFetch(spapiUrl, {
-      method: 'GET',
-      headers: opts.headers
-    }, FETCH_TIMEOUT_MS);
-
+    const spapiResp = await timeoutFetch(spapiUrl, { method: 'GET', headers: opts.headers }, FETCH_TIMEOUT_MS);
     const spapiText = await spapiResp.text();
+
     if (!spapiResp.ok) {
-      // Try to parse JSON if possible, otherwise return text
       let details = spapiText;
       try { details = JSON.parse(spapiText); } catch (e) { /* keep text */ }
       return jsonResponse(res, spapiResp.status, { error: 'SP-API error', details });
     }
 
     let data;
-    try {
-      data = JSON.parse(spapiText);
-    } catch (e) {
-      return jsonResponse(res, 502, { error: 'Invalid JSON from SP-API', raw: spapiText });
-    }
+    try { data = JSON.parse(spapiText); } catch (e) { return jsonResponse(res, 502, { error: 'Invalid JSON from SP-API', raw: spapiText }); }
 
     return jsonResponse(res, 200, data);
   } catch (err) {
-    // Catch-all
     const message = err?.message || String(err);
     return jsonResponse(res, 500, { error: 'Internal server error', details: message });
   }
