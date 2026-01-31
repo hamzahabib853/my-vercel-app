@@ -14,6 +14,7 @@ function jsonResponse(res, status, body) {
 }
 
 export default async function handler(req, res) {
+  console.log('EXTERNAL_ID present:', !!process.env.EXTERNAL_ID);
   try {
     if (req.method !== 'POST') return jsonResponse(res, 405, { error: 'Method not allowed' });
 
@@ -104,7 +105,24 @@ export default async function handler(req, res) {
       secretAccessKey: creds.SecretAccessKey,
       sessionToken: creds.SessionToken
     });
+    // normalize region and trim whitespace
+const region = (process.env.REGION || '').trim();
+if (!region) return jsonResponse(res, 500, { error: 'Missing REGION env' });
 
+const host = `sellingpartnerapi-${region}.amazonaws.com`;
+const spapiUrl = `https://${host}${path}`;
+
+console.log('DEBUG SP-API attempt', { spapiUrl, host });
+
+// Optional DNS lookup for clearer error messages (requires Node 18+ runtime)
+import dns from 'dns/promises';
+try {
+  const addr = await dns.lookup(host);
+  console.log('DEBUG DNS lookup success', addr);
+} catch (dnsErr) {
+  console.error('DEBUG DNS lookup failed', dnsErr.message);
+  return jsonResponse(res, 502, { error: 'DNS lookup failed', details: dnsErr.message, host });
+}
     const spapiUrl = `https://${host}${path}`;
     const spapiResp = await timeoutFetch(spapiUrl, { method: 'GET', headers: opts.headers }, FETCH_TIMEOUT_MS);
     const spapiText = await spapiResp.text();
