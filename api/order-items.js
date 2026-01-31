@@ -1,15 +1,39 @@
 import fetch from 'node-fetch';
 import { STSClient, AssumeRoleCommand } from '@aws-sdk/client-sts';
 import aws4 from 'aws4';
-import dns from 'dns/promises';
 
 const FETCH_TIMEOUT_MS = 15000;
+const MAX_FETCH_RETRIES = 3;
+const RETRY_BASE_MS = 300;
 
 function timeoutFetch(url, opts = {}, timeout = FETCH_TIMEOUT_MS) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeout);
   const merged = { ...opts, signal: controller.signal };
   return fetch(url, merged).finally(() => clearTimeout(id));
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithRetries(url, opts = {}, retries = MAX_FETCH_RETRIES) {
+  let attempt = 0;
+  while (true) {
+    try {
+      const resp = await timeoutFetch(url, opts);
+      return resp;
+    } catch (err) {
+      attempt += 1;
+      const isLast = attempt > retries;
+      const code = err && err.code ? err.code : null;
+      console.warn('Fetch attempt failed', { url, attempt, code, message: err?.message });
+      if (isLast) throw err;
+      // Exponential backoff with jitter
+      const backoff = Math.round(RETRY_BASE_MS * Math.pow(2, attempt - 1) * (0.8 + Math.random() * 0.4));
+      await sleep(backoff);
+    }
+  }
 }
 
 function jsonResponse(res, status, body) {
@@ -52,7 +76,7 @@ export default async function handler(req, res) {
       if (!process.env[k]) return jsonResponse(res, 500, { error: 'Missing environment variable', missing: k });
     }
 
-    // Normalize region once
+    // Normalize region once and trim whitespace
     const region = (process.env.REGION || '').trim();
     if (!region) return jsonResponse(res, 500, { error: 'Missing REGION env' });
 
@@ -112,16 +136,7 @@ export default async function handler(req, res) {
     const path = `/orders/v0/orders/${encodeURIComponent(orderId)}/orderItems`;
     const spapiUrl = `https://${host}${path}`;
 
-    console.log('DEBUG SP-API attempt', { spapiUrl, host });
-
-    // DNS lookup to surface resolution errors early
-    try {
-      const addr = await dns.lookup(host);
-      console.log('DEBUG DNS lookup success', addr);
-    } catch (dnsErr) {
-      console.error('DEBUG DNS lookup failed', dnsErr && dnsErr.stack ? dnsErr.stack : String(dnsErr));
-      return jsonResponse(res, 502, { error: 'DNS lookup failed', details: dnsErr.message || String(dnsErr), host });
-    }
+    console.log('SP-API request', { spapiUrl, host });
 
     const opts = {
       host,
@@ -135,17 +150,20 @@ export default async function handler(req, res) {
       }
     };
 
-    // Sign request with temporary credentials
     aws4.sign(opts, {
       accessKeyId: creds.AccessKeyId,
       secretAccessKey: creds.SecretAccessKey,
       sessionToken: creds.SessionToken
     });
 
-    // Ensure headers object exists and use it for fetch
     const fetchHeaders = opts.headers || {};
-    // aws4 may set a Host header; keep it
-    const spapiResp = await timeoutFetch(spapiUrl, { method: 'GET', headers: fetchHeaders }, FETCH_TIMEOUT_MS);
+    let spapiResp;
+    try {
+      spapiResp = await fetchWithRetries(spapiUrl, { method: 'GET', headers: fetchHeaders });
+    } catch (err) {
+      console.error('SP-API fetch failed after retries', err && err.stack ? err.stack : String(err));
+      return jsonResponse(res, 502, { error: 'SP-API fetch failed', details: err?.message || String(err) });
+    }
 
     const spapiText = await spapiResp.text();
 
